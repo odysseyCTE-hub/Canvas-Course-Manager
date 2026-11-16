@@ -1,0 +1,29 @@
+# Canvas Course Manager: only the program files below are ever uploaded to GitHub.
+# Everything else (tokens, settings, logs, spreadsheets, lesson files) stays on your computer.
+
+# 1) Ignore everything...
+*
+
+# 2) ...except these shared program files.
+!.gitignore
+!canvas_course_manager.py
+!*.pyw
+!*.command
+!*.bat
+!README.md
+!CHANGELOG.md
+!RELEASING.md
+
+# 3) # 3) Private files: never upload these, even if a rule above would allow them.
+#    (Never use "git add -f"; it skips this file entirely.)
+canvas_config.txt
+google_token.json
+google_client_secret.json
+course_settings.json
+program_settings.json
+*.log
+.canvas_lesson_uploader_state.json
+.update_status.json
+backups/
+__pycache__/
+*.tmp
