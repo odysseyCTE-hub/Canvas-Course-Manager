@@ -2,6 +2,11 @@
 
 Newest version first. When you update, the program shows you the notes for the new version.
 
+## 1.3.1
+- First-time setup now installs everything at once, including the modern look, so there's nothing extra to click.
+- The one-time setup message now makes clear the helper packages are needed for settings spreadsheets.
+- Fixed: the Mac launcher can be double-clicked to open the program.
+
 ## 1.2.0
 - New: "Create settings spreadsheet…" makes a ready-to-edit spreadsheet from your Canvas course (or a blank template). It only reads Canvas and never replaces an existing file.
 - Simpler spreadsheet: course ID is set once on Start Here; unused columns removed; gray cells show what doesn't apply.
