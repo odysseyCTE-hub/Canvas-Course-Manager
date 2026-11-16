@@ -6370,7 +6370,7 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
                 "The settings spreadsheet needs two free helper packages (pandas and openpyxl)"
                 + (", and the modern look needs one more (sv-ttk)" if sv_ttk is None else "") + ".\n\n"
                 "Install them now? It needs an internet connection and takes about a minute.\n\n"
-                "(Uploading lessons works without them.)", parent=self):
+                "(You'll need them to use settings spreadsheets.)", parent=self):
             return
         self._pip_install(packages)
 
