@@ -5,7 +5,7 @@ rem Double-click this file to open Canvas Course Manager.
 rem It must sit in the same folder as canvas_course_manager.py.
 cd /d "%~dp0"
 set "APP=canvas_course_manager.py"
-set "PKGS=pandas openpyxl tzdata"
+set "PKGS=pandas openpyxl tzdata sv-ttk"
 
 if not exist "%APP%" goto :no_app
 
@@ -25,7 +25,7 @@ if errorlevel 1 goto :old_python
 if errorlevel 1 goto :no_tk
 
 rem --- Install helper packages the first time only ---
-%PY% -c "import pandas, openpyxl, tzdata" >nul 2>&1
+%PY% -c "import pandas, openpyxl, tzdata, sv_ttk" >nul 2>&1
 if not errorlevel 1 goto :launch
 echo.
 echo  First-time setup: installing a few free helper packages.
