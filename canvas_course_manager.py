@@ -1,8 +1,8 @@
 """Canvas Course Manager: build Canvas modules from the lesson folders on your computer.
 
 FOR TEACHERS (you never need to open or edit this file)
-  Windows: double-click  "Canvas Course Manager.pyw"   (opens a window, no black box)
-  Mac:     double-click  "Start Canvas Course Manager (Mac).command"
+  Windows: double-click  "Start Canvas Course Manager.bat"
+  Mac:     double-click  "Start Canvas Course Manager.command"
 
 Everything is set up inside the window:
   Course setup tab   your Canvas address, access token, course ID, and course folder
@@ -135,7 +135,7 @@ MAX_RECENT_COURSES = 8
 
 # ========================= VERSION AND UPDATES =========================
 # Raise __version__ for every release (see RELEASING.md) and add a CHANGELOG.md entry.
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 PROGRAM_FILE = Path(__file__).resolve()
 PROGRAM_FILE_NAME = "canvas_course_manager.py"   # Name of this file in the GitHub repository.
 # The public GitHub repository updates come from, as "owner/repository".
