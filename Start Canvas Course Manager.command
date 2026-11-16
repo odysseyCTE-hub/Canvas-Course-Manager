@@ -19,9 +19,9 @@ python3 -c "import tkinter" 2>/dev/null || {
   echo "This Python can't draw windows (tkinter missing). Install Python from python.org instead."
   finish; }
 
-if ! python3 -c "import pandas, openpyxl" 2>/dev/null; then
+if ! python3 -c "import pandas, openpyxl, sv_ttk" 2>/dev/null; then
   echo "First-time setup: installing helper packages (one time only)..."
-  python3 -m pip install --user --disable-pip-version-check pandas openpyxl tzdata || {
+  python3 -m pip install --user --disable-pip-version-check pandas openpyxl tzdata sv-ttk || {
     echo "The helper packages didn't install. Check your internet and try again."; finish; }
 fi
 
