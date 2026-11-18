@@ -76,6 +76,7 @@ import mimetypes
 import os
 import queue
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -135,7 +136,7 @@ MAX_RECENT_COURSES = 8
 
 # ========================= VERSION AND UPDATES =========================
 # Raise __version__ for every release (see RELEASING.md) and add a CHANGELOG.md entry.
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 PROGRAM_FILE = Path(__file__).resolve()
 PROGRAM_FILE_NAME = "canvas_course_manager.py"   # Name of this file in the GitHub repository.
 # The public GitHub repository updates come from, as "owner/repository".
@@ -1565,19 +1566,23 @@ def assessment_kind(path: Path, folder: Path) -> str:
 
 
 def lesson_details(lesson_folder: Path, html_path: Path | None = None) -> tuple[str, str]:
-    """Return (lesson number, lesson name), preferring the HTML file name."""
+    """Return (lesson number, lesson name), preferring the HTML file name.
+
+    The number may be whole ("32") or have parts ("2.1", "2.10"), so
+    "Lesson 2.1 - Binary" gives ("2.1", "Binary").
+    """
     source = html_path.stem if html_path else lesson_folder.name
-    full_rx = _word_rx("lesson") + r"[\s_-]*(\d+)\s*(?:[_-]+\s*)?(.*)$"
+    full_rx = _word_rx("lesson") + r"[\s_-]*(\d+(?:\.\d+)*)\s*(?:[_-]+\s*)?(.*)$"
     match = re.search(full_rx, source, re.IGNORECASE)
     if not match:
         match = re.search(full_rx, lesson_folder.name, re.IGNORECASE)
     if match:
         number = match.group(1)
-        name = re.sub(r"\s+", " ", re.sub(r"[_]+", " ", match.group(2).strip(" _-"))).strip(" -_")
+        name = re.sub(r"\s+", " ", re.sub(r"[_]+", " ", match.group(2).strip(" _-."))).strip(" -_.")
         if not name and html_path is not None:
             fallback = re.search(full_rx, lesson_folder.name, re.IGNORECASE)
             if fallback:
-                name = re.sub(r"[_]+", " ", fallback.group(2)).strip(" -_")
+                name = re.sub(r"[_]+", " ", fallback.group(2)).strip(" -_.")
         return number, name
     return "", source.replace("_", " ").strip()
 
@@ -2166,6 +2171,17 @@ def _number_after(key: str, text: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def lesson_number_key(number: str) -> str:
+    """Compare lesson numbers without leading zeros: '02.01' and '2.1' are the same lesson."""
+    return ".".join(str(int(part)) for part in str(number).split(".") if part.isdigit())
+
+
+def _lesson_number_after(text: str) -> str | None:
+    """The lesson number in a name, whole or with parts: 'Lesson 2.1 Slides' -> '2.1'."""
+    match = re.search(r"(?<![a-z])" + _word_rx("lesson") + r"[\s_-]*(\d+(?:\.\d+)*)(?![\d.])", text, re.IGNORECASE)
+    return lesson_number_key(match.group(1)) if match else None
+
+
 def drive_slides_index() -> list[dict[str, Any]]:
     """Every Google Slides file under the Drive course folder (four folders deep), read once per run."""
     global _DRIVE_INDEX
@@ -2184,9 +2200,9 @@ def drive_slides_index() -> list[dict[str, Any]]:
                 queue_.append((entry["id"], chain + [entry["name"]], depth + 1))
             elif entry.get("mimeType") == SLIDES_MIME and not entry["name"].startswith(OLD_VERSION_PREFIX):
                 names = chain + [entry["name"]]
-                lesson = _number_after("lesson", entry["name"])
+                lesson = _lesson_number_after(entry["name"])
                 if lesson is None:
-                    lesson = next((n for n in (_number_after("lesson", c) for c in reversed(chain)) if n is not None), None)
+                    lesson = next((n for n in (_lesson_number_after(c) for c in reversed(chain)) if n is not None), None)
                 unit = next((n for n in (_number_after("unit", c) for c in names) if n is not None), None)
                 found.append({"id": entry["id"], "name": entry["name"], "path": " / ".join(names),
                               "lesson": lesson, "unit": unit})
@@ -2200,7 +2216,7 @@ def ensure_drive_slides(lesson_folder: Path, number: str, title: str) -> None:
         return
     unit = leading_number(lesson_folder.parent.name, "unit")
     matches = [f for f in drive_slides_index()
-               if f["lesson"] == int(number) and (f["unit"] is None or unit is None or f["unit"] == unit)]
+               if f["lesson"] == lesson_number_key(number) and (f["unit"] is None or unit is None or f["unit"] == unit)]
     if not matches:
         log(f"No Google Slides for {word('lesson')} {number} in the Drive folder.")
         return
@@ -2319,6 +2335,158 @@ def choose_folders() -> list[Path]:
         if _has_assessment_zip(unit):
             found.append(unit)
     return found
+
+
+# ----------------------- organizing loose files into folders -----------------------
+# Teachers who keep every file in one folder ("Lesson 2.1 Plan.docx", "Lesson 2.2 Checkpoint.zip",
+# "Unit 2 Exam.zip") can have them sorted into Unit / Lesson folders. This only moves files on
+# this computer. It never touches Canvas, never overwrites a file, and never guesses.
+
+# The program's own files are never moved and not worth mentioning.
+_ORGANIZER_QUIET_NAMES = {"canvas_config.txt", "course_settings.json", "program_settings.json",
+                          "canvas_lesson_uploader.log", "readme.md", "changelog.md", "releasing.md"}
+_ORGANIZER_QUIET_SUFFIXES = {".py", ".bat", ".command", ".tmp"}
+
+
+def _lesson_codes_in(name: str) -> set[tuple[int, str]]:
+    """Every (unit, lesson number) in a name like 'Lesson 2.1 Plan' or '2.1 Plan'."""
+    with_word = re.search(r"(?<![a-z0-9])" + _word_rx("lesson") + r"[\s_-]*\d+\.\d+(?![\d.])", name, re.IGNORECASE)
+    if not with_word and not re.match(r"^\s*\d+\.\d+(?![\d.])", name):
+        return set()
+    # Count every number like 2.1 in the name, so "Lesson 2.1 and 2.2 review" is flagged, not guessed.
+    return {(int(m.group(1)), f"{int(m.group(1))}.{int(m.group(2))}")
+            for m in re.finditer(r"(?<![\d.])(\d+)\.(\d+)(?![\d.])", name)}
+
+
+def _unit_assessment_in(name: str) -> tuple[int, str] | None | str:
+    """(unit, 'activity' or 'exam') for names like 'Unit 2 Exam'. Returns 'unclear' when it could be both."""
+    units = {int(m.group(1)) for m in re.finditer(r"(?<![a-z0-9])" + _word_rx("unit") + r"[\s_-]*(\d+)(?!\d)",
+                                                  name, re.IGNORECASE)}
+    kinds = {kind for kind in ("activity", "exam") if wkey(kind) in norm(name)}
+    if not units or not kinds:
+        return None
+    if len(units) > 1 or len(kinds) > 1:
+        return "unclear"
+    return next(iter(units)), next(iter(kinds))
+
+
+def _one_folder(parent: Path, test: Callable[[Path], bool]) -> Path | None | str:
+    """The single subfolder that passes the test, None if there is none, or 'unclear' if several do."""
+    if not parent.is_dir():
+        return None
+    found = [p for p in parent.iterdir() if p.is_dir() and test(p)]
+    return found[0] if len(found) == 1 else ("unclear" if found else None)
+
+
+def plan_organize(course_folder: Path) -> tuple[list[tuple[Path, Path]], list[tuple[Path, str]]]:
+    """Work out which loose files would move where. Reads folders only; changes nothing.
+
+    Looks at files sitting directly in the course folder and directly in each Unit folder.
+    Returns (moves as (from, to), files left alone with the reason).
+    """
+    moves: list[tuple[Path, Path]] = []
+    left: list[tuple[Path, str]] = []
+    taken: set[str] = set()
+
+    def unit_dir(number: int) -> Path | str:
+        found = _one_folder(course_folder, lambda p: leading_number(p.name, "unit") == number)
+        if found == "unclear":
+            return f"more than one folder is named like '{word('unit')} {number}'"
+        return found or course_folder / f"{word('unit')} {number}"
+
+    def lesson_dir(unit: Path, code: str) -> Path | str:
+        found = _one_folder(unit, lambda p: is_lesson_name(p.name)
+                            and {c for _, c in _lesson_codes_in(p.name)} == {code})
+        if found == "unclear":
+            return f"more than one folder in '{unit.name}' is named like '{word('lesson')} {code}'"
+        return found or unit / f"{word('lesson')} {code}"
+
+    def assessment_dir(unit: Path, kind: str) -> Path | str:
+        found = _one_folder(unit, lambda p: not is_lesson_name(p.name) and wkey(kind) in norm(p.name))
+        if found == "unclear":
+            return f"more than one {word(kind).lower()} folder is in '{unit.name}'"
+        return found or unit / f"{unit.name.split(' - ')[0].strip()} {word(kind)}"
+
+    def plan(path: Path, target: Path | str) -> None:
+        if isinstance(target, str):
+            left.append((path, target))
+            return
+        dest = target / path.name
+        if dest.exists() or str(dest).casefold() in taken:
+            left.append((path, f"a file with the same name is already in '{target.name}'"))
+            return
+        taken.add(str(dest).casefold())
+        moves.append((path, dest))
+
+    try:
+        top_files = sorted((p for p in course_folder.iterdir() if p.is_file()), key=lambda p: natural_key(p.name))
+    except OSError:
+        return moves, left
+    for path in top_files:
+        if path.name.startswith((".", "~$")) or path.name.lower() in _ORGANIZER_QUIET_NAMES \
+                or path.suffix.lower() in _ORGANIZER_QUIET_SUFFIXES:
+            continue
+        if path.suffix.lower() == ".xlsx":
+            left.append((path, "spreadsheets stay in the course folder"))
+            continue
+        codes = _lesson_codes_in(path.stem)
+        assessment = _unit_assessment_in(path.stem)
+        if len(codes) > 1:
+            left.append((path, "the name has more than one lesson number"))
+        elif codes:
+            unit_number, code = next(iter(codes))
+            unit = unit_dir(unit_number)
+            plan(path, unit if isinstance(unit, str) else lesson_dir(unit, code))
+        elif assessment == "unclear":
+            left.append((path, f"can't tell which {word('unit').lower()} {word('activity').lower()} "
+                               f"or {word('exam').lower()} this belongs to"))
+        elif assessment:
+            unit = unit_dir(assessment[0])
+            plan(path, unit if isinstance(unit, str) else assessment_dir(unit, assessment[1]))
+        else:
+            left.append((path, f"no lesson number like 2.1, or '{word('unit')} 2 {word('exam')}', in the name"))
+
+    # Lesson files sitting loose inside a Unit folder. Activity and exam files are fine there already.
+    for unit_name in list_units(course_folder):
+        unit = course_folder / unit_name
+        unit_number = leading_number(unit_name, "unit")
+        for path in sorted((p for p in unit.iterdir() if p.is_file()), key=lambda p: natural_key(p.name)):
+            if path.name.startswith((".", "~$")):
+                continue
+            codes = _lesson_codes_in(path.stem)
+            if not codes:
+                continue
+            if len(codes) > 1:
+                left.append((path, "the name has more than one lesson number"))
+                continue
+            file_unit, code = next(iter(codes))
+            if unit_number is not None and file_unit != unit_number:
+                left.append((path, f"it's named {word('lesson')} {code} but sits in '{unit_name}'"))
+                continue
+            plan(path, lesson_dir(unit, code))
+    return moves, left
+
+
+def apply_organize(course_folder: Path, moves: list[tuple[Path, Path]]) -> tuple[int, list[str]]:
+    """Move the planned files. Never overwrites: a file whose spot is taken stays put."""
+    moved, problems = 0, []
+    for source, dest in moves:
+        try:
+            if dest.exists():
+                problems.append(f"{source.name}: a file with that name appeared in '{dest.parent.name}', so it stayed put.")
+                continue
+            if not source.is_file():
+                problems.append(f"{source.name}: the file is no longer there.")
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(dest))
+            moved += 1
+            log(f"Organized: {source.relative_to(course_folder)}  →  {dest.relative_to(course_folder)}")
+        except OSError as exc:
+            problems.append(f"{source.name}: {exc}")
+    for problem in problems:
+        log(f"WARNING: Organize files: {problem}")
+    return moved, problems
 
 
 def validate_canvas_targets() -> None:
@@ -4709,6 +4877,12 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
                   text="Makes a new spreadsheet filled in from your Canvas course, ready to edit. "
                        "It only reads Canvas and never replaces an existing file."
                   ).grid(row=8, column=1, columnspan=2, sticky="w", padx=8)
+        ttk.Button(course, text="Organize loose files into folders…", command=self._organize_dialog
+                   ).grid(row=9, column=1, columnspan=2, sticky="w", padx=8, pady=(12, 2))
+        ttk.Label(course, style="Hint.TLabel", wraplength=320, justify="left",
+                  text="Keep all your files in one folder? Name them like 'Lesson 2.1 Plan' and this sorts "
+                       "them into Unit and Lesson folders for you. You'll see the list before anything moves."
+                  ).grid(row=10, column=1, columnspan=2, sticky="w", padx=8)
 
         modules = ttk.LabelFrame(tab, text="Modules and pages", padding=10)
         modules.grid(row=1, column=0, sticky="nsew", padx=(0, 8), pady=(12, 0))
@@ -5355,7 +5529,9 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
         apply_look(self.collect_settings())
         units = list_units(folder)
         if not units:
-            self.lbl_folder.config(text=f"No folders named like '{unit_word} 1' were found here.", style="Bad.TLabel")
+            self.lbl_folder.config(text=f"No folders named like '{unit_word} 1' were found here. If your files "
+                                        f"are all in this one folder, try 'Organize loose files into folders' below.",
+                                   style="Bad.TLabel")
             return
         folders = sum(len(list_unit_folders(folder, u)) for u in units)
         self.lbl_folder.config(text=f"Found {len(units)} {unit_word.lower()} folder(s) holding {folders} lesson, "
@@ -5421,6 +5597,81 @@ class App(tk.Tk if tk else object):  # type: ignore[misc]
                                             filetypes=[("Excel workbook", "*.xlsx"), ("All files", "*.*")])
         if chosen:
             self.v_sheet.set(str(Path(chosen)))
+
+    # ------------------------------------------------------------ organize loose files
+    def _organize_dialog(self) -> None:
+        """Preview, then move loose files into Unit / Lesson folders. Never touches Canvas."""
+        if self.running:
+            return
+        self._commit_folder()
+        s = self.collect_settings()
+        folder = Path(s["course_folder"]) if s["course_folder"] else None
+        if not folder or not folder.is_dir():
+            messagebox.showwarning("Choose a course folder first",
+                                   "Pick your course folder on this tab, then try again.", parent=self)
+            return
+        apply_settings(s)
+        apply_look(s)
+        moves, left = plan_organize(folder)
+        if not moves and not left:
+            messagebox.showinfo("Nothing to organize",
+                                "There are no loose files in this course folder or its unit folders.", parent=self)
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Organize loose files into folders")
+        dialog.transient(self)
+        frame = ttk.Frame(dialog, padding=16)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+        intro = (f"{len(moves)} file(s) can be sorted into folders. Nothing has moved yet. "
+                 "Only files on this computer move; Canvas is not touched, and no file is ever replaced."
+                 if moves else "None of the loose files could be sorted. Here's why:")
+        ttk.Label(frame, text=intro, wraplength=560, justify="left").grid(row=0, column=0, columnspan=2,
+                                                                          sticky="w", pady=(0, 8))
+        text = tk.Text(frame, width=80, height=20, wrap="none", font=self.font_body)
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.grid(row=1, column=0, sticky="nsew")
+        scroll.grid(row=1, column=1, sticky="ns")
+
+        grouped: dict[Path, list[Path]] = {}
+        for source, dest in moves:
+            grouped.setdefault(dest.parent, []).append(source)
+        for target in sorted(grouped, key=lambda p: natural_key(str(p.relative_to(folder)))):
+            label = " / ".join(target.relative_to(folder).parts)
+            text.insert("end", f"{label}{'' if target.exists() else '   (new folder)'}\n")
+            for source in grouped[target]:
+                where = "" if source.parent == folder else f"   (from {source.parent.name})"
+                text.insert("end", f"      {source.name}{where}\n")
+        if left:
+            text.insert("end", f"\nLeft where they are ({len(left)}):\n")
+            for source, reason in left:
+                text.insert("end", f"      {source.name}  —  {reason}\n")
+        text.config(state="disabled")
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=2, column=0, columnspan=2, sticky="e", pady=(12, 0))
+
+        def go() -> None:
+            dialog.destroy()
+            moved, problems = apply_organize(folder, moves)
+            self._refresh_units()
+            message = f"Moved {moved} file(s) into their folders."
+            if problems:
+                message += "\n\nSome files stayed put:\n" + "\n".join(problems[:10])
+                if len(problems) > 10:
+                    message += f"\n…and {len(problems) - 10} more (see the log)."
+            message += "\n\nNext step: run a preview on the Run tab to see what would go to Canvas."
+            (messagebox.showwarning if problems else messagebox.showinfo)("Files organized", message, parent=self)
+
+        ttk.Button(buttons, text="Cancel" if moves else "Close", command=dialog.destroy).pack(side="right")
+        if moves:
+            ttk.Button(buttons, text=f"Move {len(moves)} file(s)", style=self.accent, command=go
+                       ).pack(side="right", padx=(0, 8))
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
+        dialog.grab_set()
 
     # ------------------------------------------------------------ create a spreadsheet
     def _create_sheet_dialog(self) -> None:
