@@ -2,6 +2,25 @@
 
 Newest version first. When you update, the program shows you the notes for the new version.
 
+## 1.4.0 — 2026-11-18
+
+### Fixed
+- Lessons numbered like 2.1, 2.2, 2.10 now get the right titles. Before, "Lesson 2.1"
+  came out as "Lesson 2 Checkpoint - .1 …", and lessons 2.1 and 2.2 could be mixed up
+  because they shared the same titles (for example, "Lesson 2 Plan").
+- Google Drive slides now match lessons numbered like 2.1 instead of stopping with an error.
+
+### Added
+- New "Organize loose files into folders…" button on the Course setup tab. If you keep
+  all your files in one folder, name them like "Lesson 2.1 Plan.docx" or "Unit 2 Exam.zip"
+  and the program sorts them into Unit and Lesson folders for you.
+  - You see the full list before anything moves.
+  - Only files on your computer move; Canvas is not touched.
+  - No file is ever replaced, and anything unclear is left where it is, with the reason shown.
+
+### Unchanged
+- Courses using whole lesson numbers (Lesson 32) work exactly as before.
+
 ## 1.3.1
 - First-time setup now installs everything at once, including the modern look, so there's nothing extra to click.
 - The one-time setup message now makes clear the helper packages are needed for settings spreadsheets.
